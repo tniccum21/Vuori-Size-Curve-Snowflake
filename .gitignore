@@ -1,0 +1,76 @@
+# Python bytecode / compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.spyderproject
+.spyproject
+.ropeproject
+.project
+.pydevproject
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# Project specific files
+# Comment out if you want to include sample data files in version control
+# *.csv
+*.xlsx
+logs/
+ERP Size weight.xlsx
+F25 Size Weight Key_Updated for Q4.xlsx
+S25 Size Weight Key vSC.xlsx
+
+# Secrets - never commit these!
+secrets.py
+credentials.json
+*_key.json
+*.pem
+*.key
