@@ -19,66 +19,76 @@ class ERPSizeRepository:
     Repository for loading and accessing ERP size curve data from Snowflake.
     """
 
-    def __init__(self, snowflake_config: Optional[Dict[str, str]] = None, existing_session=None):
+    def __init__(self, existing_session=None, connector=None):
         """
         Initialize the repository with Snowflake connection details.
 
         Args:
-            snowflake_config: Optional dictionary containing Snowflake connection
-                              parameters ('user', 'password', 'account', 'warehouse',
-                              'database', 'schema'). If None, uses the SNOWFLAKE_CONFIG
-                              from database_config.py.
             existing_session: Optional existing Snowflake session to reuse
+            connector: Optional existing SnowflakeConnector instance to reuse
         """
-        # Start with the global Snowflake config
-        base_config = SNOWFLAKE_CONFIG.copy()
-        
-        # Update database and schema to use ERP-specific values
-        base_config.update({
-            'database': SNOWFLAKE_DATABASE,
-            'schema': SNOWFLAKE_SCHEMA
-        })
-        
-        # Allow override with provided config
-        self.snowflake_config = snowflake_config or base_config
-        
-        # No need to validate credentials since we're using SSO
-        
         # Legacy attributes to prevent AttributeError when used in size_curve_clustering.py
         self.erp_mapping_file = "Snowflake DB"
         self.erp_weights_file = "Snowflake DB"
         self.erp_combined_file = "Snowflake DB"
 
         self.style_to_weight_map: Dict[str, Any] = {}
-        self.weight_to_distribution_map: Dict[str, Dict[str, float]} = {}
+        self.weight_to_distribution_map: Dict[str, Dict[str, float]] = {}
         self.is_initialized = False
-        self.conn = existing_session # Use existing session if provided
+        
+        # Track session and connector
+        self.connector = connector
+        self.session = existing_session
+        
+        # Log how we're getting the connection
+        if existing_session is not None:
+            print(f"Using provided Snowflake session (id: {id(existing_session)})")
+        elif connector is not None:
+            print(f"Using provided Snowflake connector (id: {id(connector)})")
+        else:
+            print("No Snowflake connection provided. Will require authentication.")
 
-    def _connect_snowflake(self):
-        """Establishes a connection to Snowflake using Snowpark."""
-        if self.conn:
-            print("Using existing Snowflake connection.")
-            return self.conn
-
-        print("Establishing new Snowflake connection...")
-        try:
-            # Use snowpark Session instead of connector
-            from snowflake.snowpark import Session
+    def _get_session(self):
+        """Gets the Snowflake session, preferring existing sources."""
+        # If we already have a session, use it
+        if self.session is not None:
+            return self.session
             
-            # Create new session using config
-            self.conn = Session.builder.configs(self.snowflake_config).create()
-            print("Snowflake connection established successfully.")
-            return self.conn
-        except Exception as e:
-            print(f"Error connecting to Snowflake: {e}")
-            raise RuntimeError(f"Could not connect to Snowflake: {e}") from e
+        # If we have a connector, use its session (connecting if needed)
+        if self.connector is not None:
+            if self.connector.session is None:
+                print("Connecting using provided connector...")
+                self.connector.connect()
+            self.session = self.connector.session
+            return self.session
+            
+        # Otherwise, we need to create our own session
+        # Try to import here to avoid import errors if not needed
+        print("Creating new Snowflake session (authentication required)...")
+        from snowflake.snowpark import Session
+        
+        # Get default config with database and schema overrides
+        config = SNOWFLAKE_CONFIG.copy()
+        config.update({
+            'database': SNOWFLAKE_DATABASE,
+            'schema': SNOWFLAKE_SCHEMA
+        })
+        
+        # Create a new session directly
+        self.session = Session.builder.configs(config).create()
+        print(f"Created new Snowflake session (id: {id(self.session)})")
+        return self.session
 
-    def _close_snowflake(self):
-        """Closes the Snowflake connection if open."""
-        if self.conn:
-            print("Closing Snowflake connection.")
-            self.conn.close()
-            self.conn = None
+    def _close_session(self):
+        """Close the session only if we created it ourselves."""
+        # Only close the session if we created it (not from connector or existing)
+        if self.session is not None and self.connector is None:
+            print("Closing Snowflake session that we created...")
+            try:
+                self.session.close()
+                self.session = None
+            except Exception as e:
+                print(f"Error closing Snowflake session: {e}")
 
     def initialize(self):
         """
@@ -90,12 +100,13 @@ class ERPSizeRepository:
 
         print("Initializing ERPSizeRepository from Snowflake...")
         try:
-            self._connect_snowflake() # Establish connection
+            # Get a session (either existing or new)
+            session = self._get_session()
 
             # Load mapping data 
             print(f"Loading mapping data from {MAPPING_TABLE}...")
             try:
-                self._load_mapping_from_snowflake()
+                self._load_mapping_from_snowflake(session)
             except Exception as e:
                 print(f"Error loading mapping data: {e}")
                 raise
@@ -103,7 +114,7 @@ class ERPSizeRepository:
             # Load weights data
             print(f"Loading weights data from {WEIGHTS_TABLE}...")
             try:
-                self._load_weights_from_snowflake()
+                self._load_weights_from_snowflake(session)
             except Exception as e:
                 print(f"Error loading weights data: {e}")
                 raise
@@ -112,18 +123,16 @@ class ERPSizeRepository:
             print("ERPSizeRepository initialization complete.")
 
         except Exception as e:
-            # Ensure connection is closed even if loading fails
-            self._close_snowflake()
+            # Only close the session if we created it ourselves
+            if self.connector is None and self.session is not None:
+                self._close_session()
             # Re-raise the exception after cleanup
             raise RuntimeError(f"Failed to initialize ERPSizeRepository: {e}") from e
-        # No finally block needed for closing here, as we might reuse the connection
-        # if initialization is successful. Consider closing explicitly when done
-        # with the repository instance if it's long-lived.
 
-    def _load_mapping_from_snowflake(self):
+    def _load_mapping_from_snowflake(self, session):
         """Load and process style to size weight code mapping data from Snowflake."""
-        if not self.conn:
-            raise RuntimeError("Snowflake connection not established.")
+        if session is None:
+            raise RuntimeError("Snowflake session not available.")
 
         # Query using the actual column names from SIZE_CURVE_CHANNEL_SEASON_CC
         query = f"""
@@ -136,11 +145,11 @@ class ERPSizeRepository:
         FROM {MAPPING_TABLE}
         WHERE SIZE_WEIGHT_CODE IS NOT NULL
         """
-        print(f"Executing query: {query}")
+        print(f"Executing mapping query using session {id(session)}")
 
         try:
             # Execute query using Snowpark API
-            mapping_df = self.conn.sql(query).to_pandas()
+            mapping_df = session.sql(query).to_pandas()
             print(f"Fetched {len(mapping_df)} mapping rows from Snowflake.")
 
             if mapping_df.empty:
@@ -272,10 +281,10 @@ class ERPSizeRepository:
             #     print(f"Skipping mapping row due to missing style_code or weight_code: {row.to_dict()}")
 
 
-    def _load_weights_from_snowflake(self):
+    def _load_weights_from_snowflake(self, session):
         """Load and process size weight code to distribution data from Snowflake."""
-        if not self.conn:
-            raise RuntimeError("Snowflake connection not established.")
+        if session is None:
+            raise RuntimeError("Snowflake session not available.")
 
         # Query using the actual column names from SIZE_CURVE_ERP_WEIGHT_PCT
         query = f"""
@@ -286,11 +295,11 @@ class ERPSizeRepository:
         FROM {WEIGHTS_TABLE}
         WHERE QUANTITY IS NOT NULL AND QUANTITY > 0
         """
-        print(f"Executing query: {query}")
+        print(f"Executing weights query using session {id(session)}")
 
         try:
             # Execute query using Snowpark API
-            weights_df = self.conn.sql(query).to_pandas()
+            weights_df = session.sql(query).to_pandas()
             print(f"Fetched {len(weights_df)} weight rows from Snowflake.")
 
             if weights_df.empty:
@@ -497,5 +506,7 @@ class ERPSizeRepository:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit: close connection."""
-        self._close_snowflake()
+        """Context manager exit: close connection if we created it."""
+        # Only close the session if we created it ourselves (not from connector)
+        if self.connector is None and self.session is not None:
+            self._close_session()

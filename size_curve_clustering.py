@@ -1981,12 +1981,12 @@ class ColorChoiceSizeCurveApp:
             with st.sidebar.expander("ERP Data Status", expanded=True):
                 with st.spinner("Loading ERP Data from Snowflake..."):
                     try:
-                        # Initialize Snowflake repository using the existing connection
-                        existing_session = None
-                        if st.session_state.connector and hasattr(st.session_state.connector, 'session'):
-                            existing_session = st.session_state.connector.session
-                            
-                        erp_repository = ERPSizeRepository(existing_session=existing_session)
+                        # Initialize Snowflake repository using the existing connector
+                        # Pass both the connector and its session (if available) to maximize reuse
+                        erp_repository = ERPSizeRepository(
+                            existing_session=st.session_state.connector.session if st.session_state.connector and hasattr(st.session_state.connector, 'session') else None,
+                            connector=st.session_state.connector
+                        )
                         erp_repository.initialize()
                         st.session_state.erp_repository = erp_repository
                         st.success("✅ ERP Size Data Loaded from Snowflake")
