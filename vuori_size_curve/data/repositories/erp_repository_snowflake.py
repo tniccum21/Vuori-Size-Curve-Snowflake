@@ -19,7 +19,7 @@ class ERPSizeRepository:
     Repository for loading and accessing ERP size curve data from Snowflake.
     """
 
-    def __init__(self, snowflake_config: Optional[Dict[str, str]] = None):
+    def __init__(self, snowflake_config: Optional[Dict[str, str]] = None, existing_session=None):
         """
         Initialize the repository with Snowflake connection details.
 
@@ -28,6 +28,7 @@ class ERPSizeRepository:
                               parameters ('user', 'password', 'account', 'warehouse',
                               'database', 'schema'). If None, uses the SNOWFLAKE_CONFIG
                               from database_config.py.
+            existing_session: Optional existing Snowflake session to reuse
         """
         # Start with the global Snowflake config
         base_config = SNOWFLAKE_CONFIG.copy()
@@ -42,11 +43,16 @@ class ERPSizeRepository:
         self.snowflake_config = snowflake_config or base_config
         
         # No need to validate credentials since we're using SSO
+        
+        # Legacy attributes to prevent AttributeError when used in size_curve_clustering.py
+        self.erp_mapping_file = "Snowflake DB"
+        self.erp_weights_file = "Snowflake DB"
+        self.erp_combined_file = "Snowflake DB"
 
         self.style_to_weight_map: Dict[str, Any] = {}
-        self.weight_to_distribution_map: Dict[str, Dict[str, float]] = {}
+        self.weight_to_distribution_map: Dict[str, Dict[str, float]} = {}
         self.is_initialized = False
-        self.conn = None # Snowflake connection object
+        self.conn = existing_session # Use existing session if provided
 
     def _connect_snowflake(self):
         """Establishes a connection to Snowflake using Snowpark."""
@@ -493,69 +499,3 @@ class ERPSizeRepository:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit: close connection."""
         self._close_snowflake()
-
-# --- Example Usage ---
-if __name__ == "__main__":
-    # Ensure Snowflake environment variables are set or provide config dict
-    if not all([SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SNOWFLAKE_ACCOUNT]):
-        print("Please set SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, and SNOWFLAKE_ACCOUNT environment variables.")
-        # Or create a config dict:
-        # config = {
-        #     'user': 'your_user',
-        #     'password': 'your_password',
-        #     'account': 'your_account.region.cloud', # e.g., xy12345.us-east-1.aws
-        #     'warehouse': 'YOUR_WH',
-        #     'database': 'DEV_DW',
-        #     'schema': 'PLANNING'
-        # }
-        # erp_repo = ERPSizeRepository(snowflake_config=config)
-    else:
-        try:
-            # Use context manager for automatic connection handling
-            with ERPSizeRepository() as erp_repo:
-                print("\n--- Repository Initialized ---")
-                # print("Mapping Keys:", list(erp_repo.style_to_weight_map.keys())[:20]) # Show some keys
-                # print("Weight Keys:", list(erp_repo.weight_to_distribution_map.keys())[:20]) # Show some keys
-
-                print("\n--- Example Lookups ---")
-
-                # Example 1: Specific lookup
-                dist, src, seas = erp_repo.get_erp_size_distribution(
-                    style_code='STYLE123',
-                    color_code='COLORABC',
-                    source='Ecomm',
-                    season='FAHO25'
-                )
-                print(f"Lookup 1 (Specific): Style=STYLE123, Color=COLORABC, Source=Ecomm, Season=FAHO25")
-                print(f"  Source Used: {src}, Season Used: {seas}")
-                print(f"  Distribution: {dist}")
-
-                # Example 2: Less specific lookup (let it find source/season)
-                dist, src, seas = erp_repo.get_erp_size_distribution(
-                    style_code='STYLE456'
-                )
-                print(f"\nLookup 2 (Style Only): Style=STYLE456")
-                print(f"  Source Used: {src}, Season Used: {seas}")
-                print(f"  Distribution: {dist}")
-
-                # Example 3: Lookup for a style that might only have Retail data
-                dist, src, seas = erp_repo.get_erp_size_distribution(
-                    style_code='STYLE789',
-                    source='Retail' # Specify source preference
-                )
-                print(f"\nLookup 3 (Style + Source Hint): Style=STYLE789, Source=Retail")
-                print(f"  Source Used: {src}, Season Used: {seas}")
-                print(f"  Distribution: {dist}")
-
-                # Example 4: Non-existent style
-                dist, src, seas = erp_repo.get_erp_size_distribution(
-                    style_code='NONEXISTENT'
-                )
-                print(f"\nLookup 4 (Non-existent): Style=NONEXISTENT")
-                print(f"  Source Used: {src}, Season Used: {seas}")
-                print(f"  Distribution: {dist}")
-
-        except (RuntimeError, ValueError) as e:
-            print(f"\nAn error occurred: {e}")
-        except Exception as e:
-             print(f"\nAn unexpected error occurred: {e}")
