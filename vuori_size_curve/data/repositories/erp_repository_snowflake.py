@@ -119,17 +119,16 @@ class ERPSizeRepository:
         if not self.conn:
             raise RuntimeError("Snowflake connection not established.")
 
-        # ***** IMPORTANT: Adjust the SELECT statement and column names *****
-        # ***** based on your actual table structure in SIZE_CURVE_CHANNEL_SEASON_CC *****
+        # Query using the actual column names from SIZE_CURVE_CHANNEL_SEASON_CC
         query = f"""
         SELECT
-            STYLE_CODE,      -- Assuming column name is STYLE_CODE
-            COLOR_CODE,      -- Assuming column name is COLOR_CODE (or similar, could be NULL)
-            CHANNEL,         -- Assuming column name is CHANNEL ('Ecomm' or 'Retail')
-            SEASON,          -- Assuming column name is SEASON ('FAHO25', 'SPSU25', etc.)
-            SIZE_WEIGHT_CODE -- Assuming this is the target weight code column
+            STYLE_CODE,       -- Style code
+            COLOR,            -- Color code 
+            CHANNEL,          -- Channel (Ecomm or Retail)
+            SEASON,           -- Season (FAHO25, SPSU25, etc.)
+            SIZE_WEIGHT_CODE  -- The weight code that maps to size distributions
         FROM {MAPPING_TABLE}
-        WHERE SIZE_WEIGHT_CODE IS NOT NULL; -- Optional: Filter out rows without a code
+        WHERE SIZE_WEIGHT_CODE IS NOT NULL
         """
         print(f"Executing query: {query}")
 
@@ -145,11 +144,10 @@ class ERPSizeRepository:
             # --- Adapt column names for processing ---
             # Rename Snowflake columns to match what _process_mapping_data expects
             # This avoids changing the logic inside _process_mapping_data too much.
-            # *** Adjust these rename mappings based on your actual Snowflake columns ***
             rename_map = {
                 'STYLE_CODE': 'Style Code',
-                'COLOR_CODE': 'Color',
-                'SIZE_WEIGHT_CODE': 'Size Weight Code', # Use a generic name here
+                'COLOR': 'Color',
+                'SIZE_WEIGHT_CODE': 'Size Weight Code',
                 'CHANNEL': 'Source', # Map Snowflake 'CHANNEL' to 'Source'
                 'SEASON': 'Season'   # Map Snowflake 'SEASON' to 'Season'
             }
@@ -273,15 +271,14 @@ class ERPSizeRepository:
         if not self.conn:
             raise RuntimeError("Snowflake connection not established.")
 
-        # ***** IMPORTANT: Adjust the SELECT statement and column names *****
-        # ***** based on your actual table structure in SIZE_CURVE_ERP_WEIGHT_PCT *****
+        # Query using the actual column names from SIZE_CURVE_ERP_WEIGHT_PCT
         query = f"""
         SELECT
-            SIZE_WEIGHT_CODE, -- Or SCALECODE, or whatever identifies the curve
-            SIZE_VALUE,       -- Or SIZEVALUEID, the actual size (e.g., 'S', 'M', 'L', '32')
-            PERCENTAGE        -- Or QUANTITY, PCT, the value for that size
+            SCALECODE,     -- The code that identifies the size curve
+            SIZEVALUEID,   -- The actual size (e.g., 'S', 'M', 'L', '32')
+            QUANTITY       -- The quantity or weight for that size
         FROM {WEIGHTS_TABLE}
-        WHERE PERCENTAGE IS NOT NULL AND PERCENTAGE > 0; -- Ensure valid percentages/quantities
+        WHERE QUANTITY IS NOT NULL AND QUANTITY > 0
         """
         print(f"Executing query: {query}")
 
@@ -294,16 +291,9 @@ class ERPSizeRepository:
                  print(f"Warning: No weights data found in {WEIGHTS_TABLE}.")
                  return # Or raise error
 
-            # --- Adapt column names for processing ---
-            # *** Adjust these rename mappings based on your actual Snowflake columns ***
-            rename_map = {
-                'SIZE_WEIGHT_CODE': 'SCALECODE',   # Map to what _process_weights_data expects
-                'SIZE_VALUE': 'SIZEVALUEID', # Map to what _process_weights_data expects
-                'PERCENTAGE': 'QUANTITY'     # Map to what _process_weights_data expects (it calculates percentages)
-            }
-            # Filter out columns not present in the DataFrame before renaming
-            rename_map = {k: v for k, v in rename_map.items() if k in weights_df.columns}
-            weights_df_renamed = weights_df.rename(columns=rename_map)
+            # The column names already match what _process_weights_data expects
+            # No need for renaming
+            weights_df_renamed = weights_df.copy()
 
             # --- Process Data ---
             # The _process_weights_data method expects a DataFrame with specific columns
