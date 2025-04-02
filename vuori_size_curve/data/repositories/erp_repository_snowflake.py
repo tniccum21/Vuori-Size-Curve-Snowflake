@@ -2,12 +2,10 @@ import pandas as pd
 import os
 from typing import Dict, List, Optional, Tuple, Any
 
-# --- Configuration Suggestion (Best Practice) ---
-# Store these securely, e.g., environment variables, secrets manager, config file
-SNOWFLAKE_USER = os.environ.get("SNOWFLAKE_USER")
-SNOWFLAKE_PASSWORD = os.environ.get("SNOWFLAKE_PASSWORD")
-SNOWFLAKE_ACCOUNT = os.environ.get("SNOWFLAKE_ACCOUNT")
-SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE")
+# Import the configuration from database_config
+from vuori_size_curve.config.database_config import SNOWFLAKE_CONFIG
+
+# Specific database and schema for ERP tables
 SNOWFLAKE_DATABASE = "DEV_DW" # As specified
 SNOWFLAKE_SCHEMA = "PLANNING" # As specified
 
@@ -28,20 +26,22 @@ class ERPSizeRepository:
         Args:
             snowflake_config: Optional dictionary containing Snowflake connection
                               parameters ('user', 'password', 'account', 'warehouse',
-                              'database', 'schema'). If None, attempts to use
-                              predefined constants/environment variables.
+                              'database', 'schema'). If None, uses the SNOWFLAKE_CONFIG
+                              from database_config.py.
         """
-        self.snowflake_config = snowflake_config or {
-            'user': SNOWFLAKE_USER,
-            'password': SNOWFLAKE_PASSWORD,
-            'account': SNOWFLAKE_ACCOUNT,
-            'warehouse': SNOWFLAKE_WAREHOUSE,
+        # Start with the global Snowflake config
+        base_config = SNOWFLAKE_CONFIG.copy()
+        
+        # Update database and schema to use ERP-specific values
+        base_config.update({
             'database': SNOWFLAKE_DATABASE,
             'schema': SNOWFLAKE_SCHEMA
-        }
-        # Validate essential config
-        if not all(self.snowflake_config.get(k) for k in ['user', 'password', 'account']):
-             raise ValueError("Missing essential Snowflake credentials (user, password, account).")
+        })
+        
+        # Allow override with provided config
+        self.snowflake_config = snowflake_config or base_config
+        
+        # No need to validate credentials since we're using SSO
 
         self.style_to_weight_map: Dict[str, Any] = {}
         self.weight_to_distribution_map: Dict[str, Dict[str, float]] = {}
@@ -49,30 +49,27 @@ class ERPSizeRepository:
         self.conn = None # Snowflake connection object
 
     def _connect_snowflake(self):
-        """Establishes a connection to Snowflake."""
-        if self.conn and not self.conn.is_closed():
+        """Establishes a connection to Snowflake using Snowpark."""
+        if self.conn:
             print("Using existing Snowflake connection.")
             return self.conn
 
         print("Establishing new Snowflake connection...")
         try:
-            self.conn = snowflake.connector.connect(
-                user=self.snowflake_config.get('user'),
-                password=self.snowflake_config.get('password'),
-                account=self.snowflake_config.get('account'),
-                warehouse=self.snowflake_config.get('warehouse'),
-                database=self.snowflake_config.get('database'),
-                schema=self.snowflake_config.get('schema')
-            )
+            # Use snowpark Session instead of connector
+            from snowflake.snowpark import Session
+            
+            # Create new session using config
+            self.conn = Session.builder.configs(self.snowflake_config).create()
             print("Snowflake connection established successfully.")
             return self.conn
-        except snowflake.connector.Error as e:
+        except Exception as e:
             print(f"Error connecting to Snowflake: {e}")
             raise RuntimeError(f"Could not connect to Snowflake: {e}") from e
 
     def _close_snowflake(self):
         """Closes the Snowflake connection if open."""
-        if self.conn and not self.conn.is_closed():
+        if self.conn:
             print("Closing Snowflake connection.")
             self.conn.close()
             self.conn = None
@@ -89,13 +86,21 @@ class ERPSizeRepository:
         try:
             self._connect_snowflake() # Establish connection
 
-            # Load mapping data
+            # Load mapping data 
             print(f"Loading mapping data from {MAPPING_TABLE}...")
-            self._load_mapping_from_snowflake()
+            try:
+                self._load_mapping_from_snowflake()
+            except Exception as e:
+                print(f"Error loading mapping data: {e}")
+                raise
 
             # Load weights data
             print(f"Loading weights data from {WEIGHTS_TABLE}...")
-            self._load_weights_from_snowflake()
+            try:
+                self._load_weights_from_snowflake()
+            except Exception as e:
+                print(f"Error loading weights data: {e}")
+                raise
 
             self.is_initialized = True
             print("ERPSizeRepository initialization complete.")
@@ -129,10 +134,9 @@ class ERPSizeRepository:
         print(f"Executing query: {query}")
 
         try:
-            with self.conn.cursor() as cur:
-                cur.execute(query)
-                mapping_df = cur.fetch_pandas_all() # Efficiently get data as DataFrame
-                print(f"Fetched {len(mapping_df)} mapping rows from Snowflake.")
+            # Execute query using Snowpark API
+            mapping_df = self.conn.sql(query).to_pandas()
+            print(f"Fetched {len(mapping_df)} mapping rows from Snowflake.")
 
             if mapping_df.empty:
                  print(f"Warning: No mapping data found in {MAPPING_TABLE}.")
@@ -183,12 +187,9 @@ class ERPSizeRepository:
                  self._process_mapping_data(group_df, source=source, season=season, weight_code_col='Size Weight Code')
 
 
-        except snowflake.connector.Error as e:
-            print(f"Snowflake Error during mapping load: {e}")
-            raise RuntimeError(f"Error loading ERP mapping data from Snowflake: {e}") from e
         except Exception as e:
-            print(f"Error processing mapping data from Snowflake: {e}")
-            raise RuntimeError(f"Error processing mapping data: {str(e)}")
+            print(f"Error loading or processing mapping data from Snowflake: {e}")
+            raise RuntimeError(f"Error loading ERP mapping data from Snowflake: {str(e)}") from e
 
 
     # --- Modified _process_mapping_data ---
@@ -285,10 +286,9 @@ class ERPSizeRepository:
         print(f"Executing query: {query}")
 
         try:
-            with self.conn.cursor() as cur:
-                cur.execute(query)
-                weights_df = cur.fetch_pandas_all()
-                print(f"Fetched {len(weights_df)} weight rows from Snowflake.")
+            # Execute query using Snowpark API
+            weights_df = self.conn.sql(query).to_pandas()
+            print(f"Fetched {len(weights_df)} weight rows from Snowflake.")
 
             if weights_df.empty:
                  print(f"Warning: No weights data found in {WEIGHTS_TABLE}.")
@@ -309,12 +309,9 @@ class ERPSizeRepository:
             # The _process_weights_data method expects a DataFrame with specific columns
             self._process_weights_data(weights_df_renamed) # Pass the renamed DataFrame
 
-        except snowflake.connector.Error as e:
-            print(f"Snowflake Error during weights load: {e}")
-            raise RuntimeError(f"Error loading ERP weights data from Snowflake: {e}") from e
         except Exception as e:
-            print(f"Error processing weights data from Snowflake: {e}")
-            raise RuntimeError(f"Error processing weights data: {str(e)}")
+            print(f"Error loading or processing weights data from Snowflake: {e}")
+            raise RuntimeError(f"Error loading ERP weights data from Snowflake: {str(e)}") from e
 
 
     # --- Modified _process_weights_data ---
@@ -568,7 +565,7 @@ if __name__ == "__main__":
                 print(f"  Source Used: {src}, Season Used: {seas}")
                 print(f"  Distribution: {dist}")
 
-        except (RuntimeError, ValueError, snowflake.connector.Error) as e:
+        except (RuntimeError, ValueError) as e:
             print(f"\nAn error occurred: {e}")
         except Exception as e:
              print(f"\nAn unexpected error occurred: {e}")
