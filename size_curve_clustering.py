@@ -26,7 +26,7 @@ import argparse
 
 # Import for ERP Size Repository
 try:
-    from vuori_size_curve.data.repositories.erp_repository import ERPSizeRepository
+    from vuori_size_curve.data.repositories.erp_repository_snowflake import ERPSizeRepository
 except ImportError:
     # This will be handled in the application initialization
     pass
@@ -1976,52 +1976,33 @@ class ColorChoiceSizeCurveApp:
             st.session_state.product_repository = product_repository
             st.session_state.sales_repository = sales_repository
             
-            # Initialize ERP repository if files provided
-            if self.erp_combined_file or (self.erp_mapping_file and self.erp_weights_file):
-                # Import the repository (add the import at the top of the file)
-                from vuori_size_curve.data.repositories.erp_repository import ERPSizeRepository
-                
-                # Create sidebar expander for ERP data status
-                with st.sidebar.expander("ERP Data Status", expanded=True):
-                    with st.spinner("Loading ERP Data..."):
-                        try:
-                            # Initialize with either combined file or separate files
-                            erp_repository = ERPSizeRepository(
-                                erp_combined_file=self.erp_combined_file,
-                                erp_mapping_file=self.erp_mapping_file,
-                                erp_weights_file=self.erp_weights_file
-                            )
-                            erp_repository.initialize()
-                            st.session_state.erp_repository = erp_repository
-                            st.success("✅ ERP Size Data Loaded")
-                            
-                            # Display some ERP data stats
-                            st.info(f"Loaded {len(erp_repository.style_to_weight_map)} style mappings and "
-                                   f"{len(erp_repository.weight_to_distribution_map)} size distributions")
-                            
-                            # Show mode information
-                            if self.erp_combined_file:
-                                st.info(f"Using combined mode with file: {os.path.basename(self.erp_combined_file)}")
-                                
-                                # Add season selector for combined file mode
-                                seasons = ["All Seasons", "FAHO25", "SPSU25"]
-                                selected_season = st.selectbox(
-                                    "Select Season", 
-                                    seasons, 
-                                    help="Filter ERP data by season"
-                                )
-                                # Store selection in session state
-                                st.session_state.selected_season = None if selected_season == "All Seasons" else selected_season
-                            else:
-                                st.info(f"Using legacy mode with separate mapping and weights files")
-                                
-                        except Exception as e:
-                            st.error(f"Error loading ERP data: {str(e)}")
-                            st.session_state.erp_repository = None
-            else:
-                st.session_state.erp_repository = None
-                # Add a note in sidebar about ERP data
-                st.sidebar.info("ERP size curves not available. Use --erp-combined-file or both --erp-mapping-file and --erp-weights-file to enable.")
+            # Initialize ERP repository from Snowflake
+            # Create sidebar expander for ERP data status
+            with st.sidebar.expander("ERP Data Status", expanded=True):
+                with st.spinner("Loading ERP Data from Snowflake..."):
+                    try:
+                        # Initialize Snowflake repository
+                        erp_repository = ERPSizeRepository()
+                        erp_repository.initialize()
+                        st.session_state.erp_repository = erp_repository
+                        st.success("✅ ERP Size Data Loaded from Snowflake")
+                        
+                        # Display some ERP data stats
+                        st.info(f"Loaded {len(erp_repository.style_to_weight_map)} style mappings and "
+                               f"{len(erp_repository.weight_to_distribution_map)} size distributions from Snowflake database")
+                        
+                        # Add season selector for Snowflake data
+                        seasons = ["All Seasons", "FAHO25", "SPSU25"]
+                        selected_season = st.selectbox(
+                            "Select Season", 
+                            seasons, 
+                            help="Filter ERP data by season"
+                        )
+                        # Store selection in session state
+                        st.session_state.selected_season = None if selected_season == "All Seasons" else selected_season
+                    except Exception as e:
+                        st.error(f"Error loading ERP data from Snowflake: {str(e)}")
+                        st.session_state.erp_repository = None
             
             # Fetch initial data
             filter_criteria = FilterCriteria()
@@ -2309,13 +2290,17 @@ def parse_args():
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Logging level (default: INFO)")
     
-    # Add ERP data file arguments
+    # Note about Snowflake ERP data
+    parser.add_argument("--use-snowflake-erp", action="store_true",
+                        help="Use Snowflake database for ERP size curve data (default)")
+    
+    # Keep legacy arguments for compatibility but deprecate them
     parser.add_argument("--erp-combined-file", type=str,
-                        help="Path to combined ERP file with data for both seasons")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--erp-mapping-file", type=str, 
-                        help="Path to ERP mapping file (style code to size weight code) - legacy support")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--erp-weights-file", type=str,
-                        help="Path to ERP weights file (size weight code to distributions) - legacy support")
+                        help=argparse.SUPPRESS)
     
     return parser.parse_args()
 
@@ -2334,13 +2319,9 @@ if __name__ == "__main__":
         parser.add_argument("--log-level", type=str, default="INFO",
                             choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                             help="Logging level (default: INFO)")
-        # Add ERP data file arguments
-        parser.add_argument("--erp-combined-file", type=str,
-                            help="Path to combined ERP file with data for both seasons")
-        parser.add_argument("--erp-mapping-file", type=str, 
-                            help="Path to ERP mapping file (style code to size weight code) - legacy support")
-        parser.add_argument("--erp-weights-file", type=str,
-                            help="Path to ERP weights file (size weight code to distributions) - legacy support")
+        # Note about Snowflake ERP data
+        parser.add_argument("--use-snowflake-erp", action="store_true",
+                            help="Use Snowflake database for ERP size curve data (default)")
         parser.print_help()
         sys.exit(0)
     
